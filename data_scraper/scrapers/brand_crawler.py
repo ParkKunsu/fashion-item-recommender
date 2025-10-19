@@ -1,10 +1,8 @@
 """
-브랜드별 상품 목록 크롤러
+브랜드별 상품 목록 크롤러 (Playwright 기반)
 """
 import time
-import undetected_chromedriver as uc
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
+from playwright.sync_api import sync_playwright, Browser, Page, Playwright
 from bs4 import BeautifulSoup
 from typing import List, Dict, Optional
 import re
@@ -16,7 +14,7 @@ logger = setup_logger(__name__)
 
 
 class BrandCrawler:
-    """브랜드별 상품 목록 크롤러"""
+    """브랜드별 상품 목록 크롤러 (Playwright)"""
 
     def __init__(self, headless: bool = True):
         """
@@ -24,31 +22,41 @@ class BrandCrawler:
             headless: 헤드리스 모드 여부
         """
         self.headless = headless
-        self.driver = None
+        self.playwright: Optional[Playwright] = None
+        self.browser: Optional[Browser] = None
+        self.page: Optional[Page] = None
 
     def __enter__(self):
-        self._init_driver()
+        self._init_browser()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
-    def _init_driver(self):
-        """Chrome 드라이버 초기화"""
-        options = uc.ChromeOptions()
+    def _init_browser(self):
+        """Playwright 브라우저 초기화"""
+        self.playwright = sync_playwright().start()
 
-        if self.headless:
-            options.add_argument('--headless=new')
+        self.browser = self.playwright.chromium.launch(
+            headless=self.headless,
+            args=[
+                '--no-sandbox',
+                '--disable-dev-shm-usage',
+            ]
+        )
 
-        options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
-        options.add_argument('--disable-blink-features=AutomationControlled')
-        options.add_argument('--window-size=1920,1080')
-        options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+        # 새 컨텍스트 생성
+        context = self.browser.new_context(
+            viewport={'width': 1920, 'height': 1080},
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        )
 
-        self.driver = uc.Chrome(options=options)
-        self.driver.implicitly_wait(Config.IMPLICIT_WAIT)
-        logger.info("Chrome 드라이버 초기화 완료")
+        self.page = context.new_page()
+
+        # 기본 타임아웃 설정
+        self.page.set_default_timeout(Config.PAGE_LOAD_TIMEOUT * 1000)
+
+        logger.info("Playwright 브라우저 초기화 완료")
 
     def search_brand_products(
         self,
@@ -66,32 +74,35 @@ class BrandCrawler:
             상품 ID 리스트
         """
         try:
-            # 무신사 메인 페이지
             logger.info(f"브랜드 '{brand_name}' 검색 시작")
-            self.driver.get(Config.BASE_URL)
-            time.sleep(2)
+
+            # 무신사 메인 페이지 이동
+            self.page.goto(Config.BASE_URL, wait_until='networkidle')
+            self.page.wait_for_timeout(2000)
 
             # 검색창 찾기 및 검색
-            search_box = self.driver.find_element(By.CSS_SELECTOR, 'input[type="search"], input.search-input')
-            search_box.clear()
-            search_box.send_keys(brand_name)
-            search_box.send_keys(Keys.RETURN)
+            search_input = self.page.query_selector('input[type="search"], input.search-input')
+            if search_input:
+                search_input.fill(brand_name)
+                search_input.press('Enter')
 
-            time.sleep(3)
+                # 검색 결과 로딩 대기
+                self.page.wait_for_timeout(3000)
 
-            # 브랜드 필터 적용 (가능한 경우)
-            try:
-                brand_filter = self.driver.find_element(By.XPATH, f"//a[contains(text(), '{brand_name}')]")
-                brand_filter.click()
-                time.sleep(2)
-            except:
-                logger.warning("브랜드 필터를 찾을 수 없습니다. 검색 결과를 그대로 사용합니다.")
+                # 브랜드 필터 적용 시도
+                try:
+                    brand_filter = self.page.query_selector(f'xpath=//a[contains(text(), "{brand_name}")]')
+                    if brand_filter:
+                        brand_filter.click()
+                        self.page.wait_for_timeout(2000)
+                except:
+                    logger.warning("브랜드 필터를 찾을 수 없습니다. 검색 결과를 그대로 사용합니다.")
 
-            # 상품 ID 추출
-            product_ids = self._extract_product_ids(max_products)
+                # 상품 ID 추출
+                product_ids = self._extract_product_ids(max_products)
 
-            logger.info(f"브랜드 '{brand_name}': {len(product_ids)}개 상품 발견")
-            return product_ids
+                logger.info(f"브랜드 '{brand_name}': {len(product_ids)}개 상품 발견")
+                return product_ids
 
         except Exception as e:
             logger.error(f"브랜드 '{brand_name}' 검색 실패: {e}")
@@ -116,8 +127,9 @@ class BrandCrawler:
             url = f"{Config.RECOMMEND_URL}?gf={gender_filter}"
             logger.info(f"추천 페이지 접속: {url}")
 
-            self.driver.get(url)
-            time.sleep(3)
+            # 페이지 이동 및 네트워크 대기
+            self.page.goto(url, wait_until='networkidle')
+            self.page.wait_for_timeout(3000)
 
             # 스크롤하여 더 많은 상품 로딩
             self._scroll_to_load_products()
@@ -137,7 +149,9 @@ class BrandCrawler:
         product_ids = []
 
         try:
-            soup = BeautifulSoup(self.driver.page_source, 'lxml')
+            # 페이지 HTML 가져오기
+            html_content = self.page.content()
+            soup = BeautifulSoup(html_content, 'lxml')
 
             # 상품 링크에서 ID 추출
             product_links = soup.select('a[href*="/products/"]')
@@ -163,8 +177,8 @@ class BrandCrawler:
         try:
             for i in range(scroll_count):
                 # 페이지 하단으로 스크롤
-                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(2)
+                self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                self.page.wait_for_timeout(2000)
 
                 logger.info(f"스크롤 {i + 1}/{scroll_count}")
 
@@ -198,7 +212,11 @@ class BrandCrawler:
         return results
 
     def close(self):
-        """드라이버 종료"""
-        if self.driver:
-            self.driver.quit()
-            logger.info("Chrome 드라이버 종료")
+        """브라우저 종료"""
+        if self.page:
+            self.page.close()
+        if self.browser:
+            self.browser.close()
+        if self.playwright:
+            self.playwright.stop()
+        logger.info("Playwright 브라우저 종료")

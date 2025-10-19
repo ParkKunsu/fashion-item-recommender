@@ -1,11 +1,8 @@
 """
-무신사 상품 상세 페이지 스크래퍼
+상품 상세 페이지 스크래퍼 (Playwright 기반)
 """
 import time
-import undetected_chromedriver as uc
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+from playwright.sync_api import sync_playwright, Browser, Page, Playwright
 from bs4 import BeautifulSoup
 from typing import Dict, List, Optional
 from pathlib import Path
@@ -19,7 +16,7 @@ logger = setup_logger(__name__)
 
 
 class ProductScraper:
-    """무신사 상품 상세 정보 스크래퍼"""
+    """상품 상세 정보 스크래퍼 (Playwright)"""
 
     def __init__(self, headless: bool = True):
         """
@@ -27,32 +24,42 @@ class ProductScraper:
             headless: 헤드리스 모드 여부
         """
         self.headless = headless
-        self.driver = None
+        self.playwright: Optional[Playwright] = None
+        self.browser: Optional[Browser] = None
+        self.page: Optional[Page] = None
         self.image_downloader = ImageDownloader(Config.IMAGE_DOWNLOAD_PATH)
 
     def __enter__(self):
-        self._init_driver()
+        self._init_browser()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
-    def _init_driver(self):
-        """Chrome 드라이버 초기화"""
-        options = uc.ChromeOptions()
+    def _init_browser(self):
+        """Playwright 브라우저 초기화"""
+        self.playwright = sync_playwright().start()
 
-        if self.headless:
-            options.add_argument('--headless=new')
+        self.browser = self.playwright.chromium.launch(
+            headless=self.headless,
+            args=[
+                '--no-sandbox',
+                '--disable-dev-shm-usage',
+            ]
+        )
 
-        options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
-        options.add_argument('--disable-blink-features=AutomationControlled')
-        options.add_argument('--window-size=1920,1080')
-        options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+        # 새 컨텍스트 생성 (브라우저 세션)
+        context = self.browser.new_context(
+            viewport={'width': 1920, 'height': 1080},
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        )
 
-        self.driver = uc.Chrome(options=options)
-        self.driver.implicitly_wait(Config.IMPLICIT_WAIT)
-        logger.info("Chrome 드라이버 초기화 완료")
+        self.page = context.new_page()
+
+        # 기본 타임아웃 설정
+        self.page.set_default_timeout(Config.PAGE_LOAD_TIMEOUT * 1000)
+
+        logger.info("Playwright 브라우저 초기화 완료")
 
     def scrape_product(
         self,
@@ -73,10 +80,12 @@ class ProductScraper:
 
         try:
             logger.info(f"상품 페이지 접속: {url}")
-            self.driver.get(url)
 
-            # 페이지 로딩 대기
-            time.sleep(3)
+            # 페이지 이동 및 로딩 완료 대기
+            self.page.goto(url, wait_until='networkidle')
+
+            # 추가 대기 (동적 콘텐츠 로딩)
+            self.page.wait_for_timeout(2000)
 
             # 상품 정보 추출
             product_data = self._extract_product_info(product_id)
@@ -106,12 +115,13 @@ class ProductScraper:
         """상품 기본 정보 추출"""
         product_data = {
             'product_id': product_id,
-            'url': self.driver.current_url
+            'url': self.page.url
         }
 
         try:
-            # BeautifulSoup으로 파싱
-            soup = BeautifulSoup(self.driver.page_source, 'lxml')
+            # 페이지 HTML 가져오기
+            html_content = self.page.content()
+            soup = BeautifulSoup(html_content, 'lxml')
 
             # 상품명
             try:
@@ -173,18 +183,18 @@ class ProductScraper:
 
         try:
             # 메인 상품 이미지
-            main_images = self.driver.find_elements(By.CSS_SELECTOR, 'div.product-img img')
+            main_images = self.page.query_selector_all('div.product-img img')
             for img in main_images:
                 src = img.get_attribute('src')
                 if src and src.startswith('http'):
                     image_urls.append(src)
 
             # 썸네일 이미지에서 원본 URL 추출
-            thumbnails = self.driver.find_elements(By.CSS_SELECTOR, 'ul.product_thumb img')
+            thumbnails = self.page.query_selector_all('ul.product_thumb img')
             for thumb in thumbnails:
                 src = thumb.get_attribute('src')
                 if src and src.startswith('http'):
-                    # 썸네일을 원본 이미지로 변환 (무신사의 이미지 URL 패턴)
+                    # 썸네일을 원본 이미지로 변환
                     original_url = src.replace('_125.', '_500.')
                     if original_url not in image_urls:
                         image_urls.append(original_url)
@@ -192,10 +202,10 @@ class ProductScraper:
             # 상세 이미지 (스크롤 다운하여 로딩)
             try:
                 # 페이지 하단으로 스크롤
-                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(2)
+                self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                self.page.wait_for_timeout(2000)
 
-                detail_images = self.driver.find_elements(By.CSS_SELECTOR, 'div.detail_info img')
+                detail_images = self.page.query_selector_all('div.detail_info img')
                 for img in detail_images:
                     src = img.get_attribute('src')
                     if src and src.startswith('http') and src not in image_urls:
@@ -241,7 +251,11 @@ class ProductScraper:
         return products
 
     def close(self):
-        """드라이버 종료"""
-        if self.driver:
-            self.driver.quit()
-            logger.info("Chrome 드라이버 종료")
+        """브라우저 종료"""
+        if self.page:
+            self.page.close()
+        if self.browser:
+            self.browser.close()
+        if self.playwright:
+            self.playwright.stop()
+        logger.info("Playwright 브라우저 종료")

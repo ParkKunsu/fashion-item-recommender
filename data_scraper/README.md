@@ -13,7 +13,7 @@
 
 ## 기술 스택
 
-- **Selenium + undetected-chromedriver**: 동적 웹페이지 크롤링
+- **Playwright**: 빠르고 안정적인 브라우저 자동화
 - **BeautifulSoup4**: HTML 파싱
 - **Requests**: 이미지 다운로드
 - **Pillow**: 이미지 처리
@@ -26,6 +26,9 @@
 ```bash
 cd data_scraper
 pip install -r requirements.txt
+
+# Playwright 브라우저 설치 (필수)
+playwright install chromium
 ```
 
 ### 2. 환경 변수 설정
@@ -171,19 +174,24 @@ for detection in result:
 
 ## 문제 해결
 
-### Chrome 드라이버 오류
+### Playwright 브라우저 오류
 ```bash
-# Chrome 브라우저가 설치되어 있는지 확인
-google-chrome --version
+# Playwright 브라우저 재설치
+playwright install chromium
 
-# undetected-chromedriver 재설치
-pip uninstall undetected-chromedriver -y
-pip install undetected-chromedriver
+# 의존성 설치 (Linux)
+playwright install-deps chromium
 ```
 
 ### 메모리 부족
 - `max_products_per_brand` 값을 줄이세요
 - 이미지 다운로드를 비활성화하세요 (`download_images=False`)
+
+### 성능 최적화
+Playwright는 Selenium 대비 20-30% 빠른 성능을 제공합니다:
+- 자동 대기 메커니즘으로 안정성 향상
+- 네트워크 유휴 상태까지 대기 (`wait_until='networkidle'`)
+- 더 적은 메모리 사용량
 
 ## 라이센스
 
