@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 환경 변수
+.env
+
+# 데이터 파일
+data_scraper/data/images/
+data_scraper/data/csv/*.csv
+data_scraper/data/csv/*.json
+
+# 로그 파일
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb
+
+# Chrome 드라이버
+chromedriver
+chromedriver.exe
+
+# 모델 파일
+*.h5
+*.pkl
+*.pth
+*.ckpt
